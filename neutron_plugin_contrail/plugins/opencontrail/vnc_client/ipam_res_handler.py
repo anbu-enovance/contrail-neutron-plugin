@@ -48,11 +48,12 @@ class IPamMixin(object):
 
 
 class IPamBaseGet(res_handler.ResourceGetHandler):
-    resource_get_method = "network_ipam_read"
+    resource_get_method = "_cassandra_network_ipam_read"
+    obj_type = vnc_api.NetworkIpam
 
 
 class IPamGetHandler(IPamBaseGet, IPamMixin):
-    resource_list_method = "network_ipams_list"
+    resource_list_method = "_cassandra_network_ipam_list"
     detail = False
 
     def resource_get(self, context, ipam_id, fields=None):

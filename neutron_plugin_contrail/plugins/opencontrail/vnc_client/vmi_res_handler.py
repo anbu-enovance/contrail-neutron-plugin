@@ -26,6 +26,7 @@ except ImportError:
 
 import contrail_res_handler as res_handler
 import fip_res_handler
+import router_res_handler as router_handler
 import sg_res_handler as sg_handler
 import subnet_res_handler as subnet_handler
 import vn_res_handler as vn_handler
@@ -122,7 +123,8 @@ class VMInterfaceMixin(object):
                 ip_obj = port_req_memo['instance-ips'][iip_uuid]
             except KeyError:
                 try:
-                    ip_obj = self._vnc_lib.instance_ip_read(id=iip_uuid)
+                    ip_obj = res_handler.InstanceIpHandler(
+                        self._vnc_lib)._resource_get(id=iip_uuid)
                 except vnc_exc.NoIdError:
                     continue
 
@@ -247,7 +249,8 @@ class VMInterfaceMixin(object):
         try:
             vn_obj = port_req_memo['networks'][net_id]
         except KeyError:
-            vn_obj = self._vnc_lib.virtual_network_read(id=net_id)
+            vn_obj = vn_handler.VNetworkHandler(
+                self._vnc_lib)._resource_get(id=net_id)
             port_req_memo['networks'][net_id] = vn_obj
             subnets_info = (
                 subnet_handler.SubnetHandler.get_vn_subnets(vn_obj))
@@ -282,7 +285,7 @@ class VMInterfaceMixin(object):
         sg_refs = vmi_obj.get_security_group_refs()
         # read the no rule sg
         no_rule_sg = res_handler.SGHandler(
-            self._vnc_lib).get_no_rule_security_group()
+                self._vnc_lib).get_no_rule_security_group()
         for sg_ref in sg_refs or []:
             if no_rule_sg and sg_ref['uuid'] == no_rule_sg.uuid:
                 # hide the internal sg
@@ -365,7 +368,7 @@ class VMInterfaceMixin(object):
         # no_rule group should be used.
         if create_no_rule and not sec_group_list:
             sg_obj = res_handler.SGHandler(
-                self._vnc_lib).get_no_rule_security_group()
+                self._vnc_lib).get_no_rule_security_group(create=True)
             vmi_obj.add_security_group(sg_obj)
 
     def _set_vmi_extra_dhcp_options(self, vmi_obj, extra_dhcp_options):
@@ -571,7 +574,7 @@ class VMInterfaceMixin(object):
         return self._project_id_vnc_to_neutron(vmi_obj.parent_uuid)
 
     def _validate_mac_address(self, project_id, net_id, mac_address):
-        ports = self._vnc_lib.virtual_machine_interfaces_list(
+        ports = self._resource_list(
             parent_id=project_id, back_ref_id=net_id, detail=True)
 
         for port in ports:
@@ -640,7 +643,8 @@ class VMInterfaceCreateHandler(res_handler.ResourceCreateHandler,
 
         net_id = port_q['network_id']
         try:
-            vn_obj = self._vnc_lib.virtual_network_read(id=net_id)
+            vn_obj = vn_handler.VNetworkHandler(
+                self._vnc_lib)._resource_get(id=net_id)
         except vnc_exc.NoIdError:
             self._raise_contrail_exception(
                 'NetworkNotFound', net_id=net_id, resource='port')
@@ -689,8 +693,7 @@ class VMInterfaceCreateHandler(res_handler.ResourceCreateHandler,
                 self._create_instance_ips(vn_obj, vmi_obj, fixed_ips)
         except Exception as e:
             self._resource_delete(id=port_id)
-            self._raise_contrail_exception(
-                'BadRequest', resource='port', msg=str(e))
+            raise e
             # failure in creating the instance ip. Roll back
         # TODO() below reads back default parent name, fix it
         vmi_obj = self._resource_get(id=port_id,
@@ -725,7 +728,8 @@ class VMInterfaceUpdateHandler(res_handler.ResourceUpdateHandler,
                 resource='port')
 
         net_id = vmi_obj.get_virtual_network_refs()[0]['uuid']
-        vn_obj = self._vnc_lib.virtual_network_read(id=net_id)
+        vn_obj = vn_handler.VNetworkHandler(
+            self._vnc_lib)._resource_get(id=net_id)
         if port_q.get('mac_address'):
             self._validate_mac_address(
                 vmi_obj.parent_uuid,
@@ -809,8 +813,9 @@ class VMInterfaceDeleteHandler(res_handler.ResourceDeleteHandler,
 
 
 class VMInterfaceGetHandler(res_handler.ResourceGetHandler, VMInterfaceMixin):
-    resource_list_method = 'virtual_machine_interfaces_list'
-    resource_get_method = 'virtual_machine_interface_read'
+    resource_list_method = '_cassandra_virtual_machine_interface_list'
+    resource_get_method = '_cassandra_virtual_machine_interface_read'
+    obj_type = vnc_api.VirtualMachineInterface
     back_ref_fields = ['logical_router_back_refs', 'instance_ip_back_refs',
                        'floating_ip_back_refs']
 
@@ -873,8 +878,9 @@ class VMInterfaceGetHandler(res_handler.ResourceGetHandler, VMInterfaceMixin):
     def _get_vmi_resources(self, context, project_ids=None, ids=None,
                            device_ids=None, vn_ids=None):
         if device_ids:
-            rtr_objs = self._vnc_lib.logical_routers_list(obj_uuids=device_ids,
-                                                          detail=True)
+            rtr_objs = router_handler.LogicalRouterHandler(
+                self._vnc_lib)._resource_list(obj_uuids=device_ids,
+                                              detail=True)
             if not ids:
                 ids = []
             for rtr_obj in rtr_objs or []:

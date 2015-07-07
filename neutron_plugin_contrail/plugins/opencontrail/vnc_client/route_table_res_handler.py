@@ -41,12 +41,13 @@ class RouteTableMixin(object):
 
 
 class RouteTableBaseGet(res_handler.ResourceGetHandler):
-    resource_get_method = "route_table_read"
+    resource_get_method = "_cassandra_route_table_read"
+    obj_type = vnc_api.RouteTable
 
 
 class RouteTableGetHandler(RouteTableBaseGet,
                            RouteTableMixin):
-    resource_list_method = "route_tables_list"
+    resource_list_method = "_cassandra_route_table_list"
     detail = False
 
     def resource_get(self, context, rt_id, fields=None):

@@ -118,9 +118,8 @@ class SecurityGroupMixin(object):
             return
 
         proj_id = self._project_id_neutron_to_vnc(proj_id)
-        proj_obj = self._vnc_lib.project_read(id=proj_id,
-                                              fields=['security_groups'])
-        sg_groups = proj_obj.get_security_groups()
+        proj_obj = self._project_read(proj_id=proj_id)
+        sg_groups = getattr(proj_obj, "security_groups", None)
         for sg_group in sg_groups or []:
             if sg_group['to'][-1] == 'default':
                 return sg_group['uuid']
@@ -129,11 +128,12 @@ class SecurityGroupMixin(object):
 
 
 class SecurityGroupBaseGet(res_handler.ResourceGetHandler):
-    resource_get_method = "security_group_read"
+    resource_get_method = "_cassandra_security_group_read"
+    obj_type = vnc_api.SecurityGroup
 
 
 class SecurityGroupGetHandler(SecurityGroupBaseGet, SecurityGroupMixin):
-    resource_list_method = "security_groups_list"
+    resource_list_method = "_cassandra_security_group_list"
 
     def get_sg_obj(self, id=None, fq_name_str=None):
         return self._resource_get(id=id, fq_name_str=fq_name_str)
@@ -298,7 +298,6 @@ class SecurityGroupCreateHandler(res_handler.ResourceCreateHandler,
                 "SecurityGroupAlreadyExists", resource='security_group')
 
         sg_uuid = self._resource_create(sg_obj)
-
         # allow all egress traffic
         def_rule = {}
         def_rule['port_range_min'] = 0

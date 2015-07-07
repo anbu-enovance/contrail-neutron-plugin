@@ -46,10 +46,12 @@ try:
 except ImportError:
     from neutron.tests.unit.extensions import test_l3 as test_l3_plugin
 
+from neutron_plugin_contrail.tests.unit.opencontrail.vnc_mock import MockVnc
+from cfgm_common import vnc_cassandra
+vnc_cassandra.VncCassandraClient = MockVnc
+from vnc_api import vnc_api
 from neutron_plugin_contrail.plugins.opencontrail.vnc_client import (
     contrail_res_handler)
-from neutron_plugin_contrail.tests.unit.opencontrail.vnc_mock import MockVnc
-from vnc_api import vnc_api
 
 CONTRAIL_PKG_PATH = (
     "neutron_plugin_contrail.plugins.opencontrail.contrail_plugin_v3")
@@ -305,6 +307,15 @@ class TestContrailPortsV2(test_plugin.TestPortsV2,
     def test_update_port_excluding_ipv6_slaac_subnet_from_fixed_ips(self):
         self.skipTest('Not Supported yet')
 
+    def test_max_fixed_ips_exceeded(self):
+        self.skipTest('Not implemented yet')
+
+    def test_delete_network_port_exists_owned_by_network(self):
+        self.skipTest("TODO: Not implemented yet. Need to revisit")
+
+    def test_update_port_mac_used(self):
+        self.skipTest("Done in VNC, not necessary to mock")
+
     def test_delete_ports_by_device_id(self):
         self.skipTest("This method tests rpc API of "
                       "which contrail isn't using")
@@ -432,8 +443,41 @@ class TestContrailL3NatTestCase(JVContrailPluginTestCase,
     def test_router_create_call_extensions(self):
         self.skipTest("Feature needs to be implemented")
 
+    def test_router_update_gateway_with_external_ip_used_by_gw(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_update_gateway_with_invalid_external_ip(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_update_gateway_with_invalid_external_subnet(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_update_gateway_with_different_external_subnet(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_create_with_gwinfo_ext_ip(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_create_with_gwinfo_ext_ip_subnet(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_create_with_gwinfo_ext_ip_non_admin(self):
+        self.skipTest("Feature needs to be implemented")
+
     def test_router_add_interface_subnet_with_port_from_other_tenant(self):
         self.skipTest("TODO : Need to revisit")
+
+    def test_router_delete_ipv6_slaac_subnet_inuse_returns_409(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_delete_dhcpv6_stateless_subnet_inuse_returns_409(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_add_interface_ipv6_subnet(self):
+        self.skipTest("Feature needs to be implemented")
+
+    def test_router_add_iface_ipv6_ext_ra_subnet_returns_400(self):
+        self.skipTest("Feature needs to be implemented")
 
     def test_router_add_interface_subnet(self):
         self.skipTest("TODO : Need to revisit")
@@ -447,3 +491,12 @@ class TestContrailL3NatTestCase(JVContrailPluginTestCase,
     def test_create_non_router_port_device_id_of_other_teants_router_update(
             self):
         self.skipTest("Contrail doesn't support this test case")
+
+    def test_create_floatingip_with_duplicated_specific_ip(self):
+        self.skipTest("This validation is don in the backend, unnecessary to mock")
+
+    def test_router_remove_interface_callback_failure_returns_409(self):
+        self.skipTest("TODO: Need to revisit")
+
+    def test_router_clear_gateway_callback_failure_returns_409(self):
+        self.skipTest("TODO: Need to revisit")

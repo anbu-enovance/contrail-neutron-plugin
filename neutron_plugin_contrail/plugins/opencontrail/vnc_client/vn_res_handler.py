@@ -262,8 +262,9 @@ class VNetworkUpdateHandler(res_handler.ResourceUpdateHandler, VNetworkMixin):
 
 
 class VNetworkGetHandler(res_handler.ResourceGetHandler, VNetworkMixin):
-    resource_list_method = 'virtual_networks_list'
-    resource_get_method = 'virtual_network_read'
+    resource_list_method = '_cassandra_virtual_network_list'
+    resource_get_method = '_cassandra_virtual_network_read'
+    obj_type = vnc_api.VirtualNetwork
     detail = False
 
     def _network_list_project(self, project_id, count=False, filters=None):

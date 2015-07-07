@@ -52,6 +52,8 @@ class FloatingIpMixin(object):
 
         if fip_q.get('fixed_ip_address'):
             fip_obj.set_floating_ip_fixed_ip_address(fip_q['fixed_ip_address'])
+        elif fip_q.get('floating_ip_address'):
+            fip_obj.set_floating_ip_address(fip_q['floating_ip_address'])
         else:
             # fixed_ip_address not specified, pick from vmi_obj in create,
             # reset in case of disassociate
@@ -64,7 +66,8 @@ class FloatingIpMixin(object):
 
                 iip_refs = vmi_obj.get_instance_ip_back_refs()
                 if iip_refs:
-                    iip_obj = self._vnc_lib.instance_ip_read(
+                    iip_obj = res_handler.InstanceIpHandler(
+                        self._vnc_lib)._resource_get(
                         id=iip_refs[0]['uuid'])
                     fip_obj.set_floating_ip_fixed_ip_address(
                         iip_obj.get_instance_ip_address())
@@ -155,10 +158,17 @@ class FloatingIpCreateHandler(res_handler.ResourceCreateHandler,
                                            resource='floatingip', msg=msg)
         try:
             fip_uuid = self._vnc_lib.floating_ip_create(fip_obj)
-        except Exception:
-            self._raise_contrail_exception('IpAddressGenerationFailure',
+        except vnc_exc.HttpError as e:
+            if e.status_code == 400:
+                self._raise_contrail_exception(
+                    'InvalidIpForSubnet',
+                    ip_address=fip_q.get('floating_ip_address'),
+                    resource='Floatingip')
+            else:
+                self._raise_contrail_exception('IpAddressGenerationFailure',
                                            net_id=fip_q['floating_network_id'])
-        fip_obj = self._vnc_lib.floating_ip_read(id=fip_uuid)
+
+        fip_obj = self._resource_get(id=fip_uuid)
 
         return self._fip_obj_to_neutron_dict(fip_obj)
 
@@ -187,8 +197,9 @@ class FloatingIpUpdateHandler(res_handler.ResourceUpdateHandler,
 
 
 class FloatingIpGetHandler(res_handler.ResourceGetHandler, FloatingIpMixin):
-    resource_list_method = 'floating_ips_list'
-    resource_get_method = 'floating_ip_read'
+    resource_list_method = '_cassandra_floating_ip_list'
+    resource_get_method = '_cassandra_floating_ip_read'
+    obj_type = vnc_api.FloatingIp
 
     def resource_get(self, context, fip_uuid, fields=None):
         try:

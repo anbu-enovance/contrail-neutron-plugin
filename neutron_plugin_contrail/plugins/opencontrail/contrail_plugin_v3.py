@@ -13,6 +13,7 @@
 #    under the License.
 
 import time
+import socket
 
 try:
     from oslo_config import cfg
@@ -44,6 +45,7 @@ from vnc_client import subnet_res_handler as subnet_handler
 from vnc_client import svc_instance_res_handler as svc_instance_handler
 from vnc_client import vmi_res_handler as vmi_handler
 from vnc_client import vn_res_handler as vn_handler
+reload(socket)
 
 
 LOG = logging.getLogger(__name__)
@@ -53,6 +55,9 @@ vnc_extra_opts = [
     cfg.BoolOpt('multi_tenancy', default=False)
 ]
 
+cassandra_opts = [
+    cfg.StrOpt('cassandra_server_list', default="")
+]
 
 class NeutronPluginContrailCoreV3(plugin_base.NeutronPluginContrailCoreBase):
 
@@ -61,6 +66,7 @@ class NeutronPluginContrailCoreV3(plugin_base.NeutronPluginContrailCoreBase):
     def __init__(self):
         super(NeutronPluginContrailCoreV3, self).__init__()
         cfg.CONF.register_opts(vnc_extra_opts, 'APISERVER')
+        cfg.CONF.register_opts(cassandra_opts, 'CASSANDRA_SERVER')
         self._vnc_lib = None
         self.connected = self._connect_to_vnc_server()
         self._res_handlers = {}
@@ -102,6 +108,8 @@ class NeutronPluginContrailCoreV3(plugin_base.NeutronPluginContrailCoreBase):
         except cfg.NoSuchOptError:
             api_server_url = "/"
 
+        def _logger(msg, level):
+            print msg
         # Retry till a api-server is up
         connected = False
         while not connected:
@@ -134,7 +142,6 @@ class NeutronPluginContrailCoreV3(plugin_base.NeutronPluginContrailCoreBase):
         apply_subnet_host_routes = cfg.CONF.APISERVER.apply_subnet_host_routes
         kwargs = {'contrail_extensions_enabled': contrail_extension_enabled,
                   'apply_subnet_host_routes': apply_subnet_host_routes}
-
         self._res_handlers['network'] = vn_handler.VNetworkHandler(
             self._vnc_lib, **kwargs)
 

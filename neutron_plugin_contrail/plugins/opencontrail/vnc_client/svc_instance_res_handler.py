@@ -49,8 +49,9 @@ class SvcInstanceMixin(object):
 
 class SvcInstanceGetHandler(res_handler.ResourceGetHandler,
                             SvcInstanceMixin):
-    resource_get_method = "service_instance_read"
-    resource_list_method = "service_instances_list"
+    resource_get_method = "_cassandra_service_instance_read"
+    resource_list_method = "_cassandra_service_instance_list"
+    obj_type = vnc_api.ServiceInstance
     detail = False
 
     def resource_get(self, context, si_id, fields=None):

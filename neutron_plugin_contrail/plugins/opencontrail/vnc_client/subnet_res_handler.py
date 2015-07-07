@@ -20,6 +20,7 @@ from vnc_api import vnc_api
 
 import contrail_res_handler as res_handler
 from contrail_res_handler import ContrailResourceHandler
+import vmi_res_handler as vmi_handler
 import vn_res_handler as vn_handler
 
 import logging
@@ -495,8 +496,9 @@ class SubnetDeleteHandler(res_handler.ResourceDeleteHandler, SubnetMixin):
 
 
 class SubnetGetHandler(res_handler.ResourceGetHandler, SubnetMixin):
-    resource_list_method = 'virtual_networks_list'
-    resource_get_method = 'virtual_network_read'
+    resource_list_method = '_cassandra_virtual_network_list'
+    resource_get_method = '_cassandra_virtual_network_read'
+    obj_type = vnc_api.VirtualNetwork
 
     def resource_get(self, context, subnet_id, fields=None):
         subnet_key = self._subnet_vnc_read_mapping(id=subnet_id)
@@ -842,7 +844,7 @@ class SubnetHostRoutesHandler(res_handler.ContrailResourceHandler,
             return
 
         # get the list of all the ip objs for this network
-        ipobjs = self._vnc_lib.instance_ips_list(
+        ipobjs = res_handler.InstanceIpHandler(self._vnc_lib)._resource_list(
             detail=True, back_ref_id=[vn_obj.uuid])
         back_ref_fields = ['logical_router_back_refs', 'instance_ip_back_refs',
                            'floating_ip_back_refs']
@@ -855,7 +857,8 @@ class SubnetHostRoutesHandler(res_handler.ContrailResourceHandler,
             if ipaddr in new_host_prefixes:
                 port_back_refs = ipobj.get_virtual_machine_interface_refs()
                 for port_ref in port_back_refs:
-                    vmi_obj = self._vnc_lib.virtual_machine_interface_read(
+                    vmi_obj = vmi_handler.VMInterfaceHandler(
+                        self._vnc_lib)._resource_get(
                         id=port_ref['uuid'], fields=back_ref_fields)
                     self._port_add_iface_route_table(new_host_prefixes[ipaddr],
                                                      vmi_obj, subnet_id)
@@ -865,7 +868,8 @@ class SubnetHostRoutesHandler(res_handler.ContrailResourceHandler,
         back_ref_fields = ['logical_router_back_refs', 'instance_ip_back_refs',
                            'floating_ip_back_refs']
         for port_ref in port_refs or []:
-            vmi_obj = self._vnc_lib.virtual_machine_interface_read(
+            vmi_obj = vmi_handler.VMInterfaceHandler(
+                self._vnc_lib)._resource_get(
                 id=port_ref['uuid'], fields=back_ref_fields)
             intf_rt_name = '%s_%s_%s' % (_IFACE_ROUTE_TABLE_NAME_PREFIX,
                                          subnet_id, vmi_obj.uuid)

@@ -12,8 +12,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import re
 import uuid
 
+try:
+    from oslo_config import cfg
+except ImportError:
+    from oslo.config import cfg
+from cfgm_common.vnc_cassandra import VncCassandraClient
 from cfgm_common import exceptions as vnc_exc
 from neutron_plugin_contrail.plugins.opencontrail import contrail_plugin_base
 from vnc_api import common as vnc_api_common
@@ -21,10 +27,22 @@ from vnc_api import vnc_api
 
 
 class ContrailResourceHandler(object):
+    @staticmethod
+    def _logger(msg, level):
+        print msg
 
+    _cassandra = None
     def __init__(self, vnc_lib, **kwargs):
         self._vnc_lib = vnc_lib
         self._kwargs = kwargs
+
+        if not ContrailResourceHandler._cassandra:
+            cass_servers = cfg.CONF.CASSANDRA_SERVER.cassandra_server_list
+            if type(cass_servers) is str:
+                cass_servers = cass_servers.split();
+
+            ContrailResourceHandler._cassandra = VncCassandraClient(
+                cass_servers, '', None, ContrailResourceHandler._logger)
 
     @staticmethod
     def _filters_is_present(filters, key_name, match_value):
@@ -82,14 +100,26 @@ class ContrailResourceHandler(object):
     def _project_read(self, proj_id=None, fq_name=None):
         if proj_id:
             proj_id = self._project_id_neutron_to_vnc(proj_id)
-        return self._vnc_lib.project_read(id=proj_id, fq_name=fq_name)
+        try:
+            _, proj = self._cassandra._cassandra_project_read(obj_uuids=[proj_id])
+            proj = vnc_api.Project.from_dict(**proj[0])
+        except vnc_exc.NoIdError:
+            # lets ask vnc to sync this if its in keystone
+            proj = self._vnc_lib.project_read(id=proj_id, fq_name=fq_name)
+        return proj
 
     def _project_list_domain(self, domain_id):
         # TODO() till domain concept is not present in keystone
         fq_name = ['default-domain']
-        resp_dict = self._vnc_lib.projects_list(parent_fq_name=fq_name)
+        _, resp_dict = self._cassandra._cassandra_project_list()
 
-        return resp_dict['projects']
+        return [self._cassandra._cassandra_project_read(
+            obj_uuids=[x[1]])[1][0] for x in resp_dict if x[0][0] == fq_name[0]]
+
+    def _get_resource_name(self, method, action):
+        exp = re.compile("_cassandra_(.*?)_%s" % action)
+        m = re.search(exp, method)
+        return m.groups()[0]
 
 
 class ResourceCreateHandler(ContrailResourceHandler):
@@ -125,6 +155,7 @@ class ResourceGetHandler(ContrailResourceHandler):
     resource_list_method = None
     resource_get_method = None
     detail = True
+    obj_type = None
 
     def _resource_list(self, back_refs=False, **kwargs):
         if back_refs:
@@ -133,7 +164,36 @@ class ResourceGetHandler(ContrailResourceHandler):
         if 'detail' not in kwargs:
             kwargs['detail'] = self.detail
 
-        return getattr(self._vnc_lib, self.resource_list_method)(**kwargs)
+        cass_args = {}
+        if 'parent_id' in kwargs and kwargs['parent_id']:
+            if isinstance(kwargs['parent_id'], list):
+                cass_args['parent_uuids'] = kwargs['parent_id']
+            else:
+                cass_args['parent_uuids'] = [kwargs['parent_id']]
+
+        if 'back_ref_id' in kwargs and kwargs['back_ref_id']:
+            if isinstance(kwargs['back_ref_id'], list):
+                cass_args['back_ref_uuids'] = kwargs['back_ref_id']
+            else:
+                cass_args['parent_uuids'] = [kwargs['back_ref_id']]
+
+        if 'obj_uuids' in kwargs and kwargs['obj_uuids']:
+            if isinstance(kwargs['obj_uuids'], list):
+                cass_args['obj_uuids'] = kwargs['obj_uuids']
+            else:
+                cass_args['obj_uuids'] = [kwargs['obj_uuids']]
+
+        if 'count' in kwargs:
+            cass_args['count'] = True
+
+        (_, r) = getattr(self._cassandra, self.resource_list_method)(**cass_args)
+        (_, ret) = getattr(self._cassandra, self.resource_get_method)(obj_uuids=[x[1] for x in r])
+        res_name = self._get_resource_name(self.resource_list_method, "list")
+        if 'count' in kwargs:
+            return {res_name + 's': {'count': ret}}
+
+        return [self.obj_type.from_dict(**ret_fields) for ret_fields in ret]
+
 
     def _resource_get(self, resource_get_method=None, back_refs=False,
                       **kwargs):
@@ -143,7 +203,23 @@ class ResourceGetHandler(ContrailResourceHandler):
         if resource_get_method:
             return getattr(self._vnc_lib, resource_get_method)(**kwargs)
 
-        return getattr(self._vnc_lib, self.resource_get_method)(**kwargs)
+        cass_args = {}
+        if 'id' in kwargs and kwargs['id']:
+            cass_args['obj_uuids'] = [kwargs['id']]
+        elif ('fq_name' in kwargs and kwargs['fq_name']) or \
+             ('fq_name_str' in kwargs and kwargs['fq_name_str']):
+            _, resources = getattr(self._cassandra, self.resource_list_method)()
+            fq_name_str = ":".join(kwargs['fq_name']) if 'fq_name' in kwargs else kwargs['fq_name_str']
+            for r in resources:
+                if ":".join(r[0]) == fq_name_str:
+                    cass_args['obj_uuids'] = [r[1]]
+                    break
+
+            if 'obj_uuids' not in cass_args:
+                raise vnc_exc.NoIdError(fq_name_str)
+
+        _, rdict = getattr(self._cassandra, self.resource_get_method)(**cass_args)
+        return self.obj_type.from_dict(**rdict[0])
 
     def _resource_count_optimized(self, filters):
         if filters and ('tenant_id' not in filters or len(filters.keys()) > 1):
@@ -153,16 +229,16 @@ class ResourceGetHandler(ContrailResourceHandler):
         if not isinstance(project_ids, list):
             project_ids = [project_ids]
 
-        json_resource = self.resource_list_method.replace("_", "-")
-        json_resource = json_resource.replace('-list', '')
-        if self.resource_list_method == "floating_ips_list":
+        res_name = self._get_res_name(self.resource_list_method, "list")
+        res_name += 's'
+        if self.resource_list_method == "_cassandra_floating_ip_list":
             count = lambda pid: self._resource_list(
                 back_ref_id=pid, count=True, back_refs=False,
-                detail=False)[json_resource]['count']
+                detail=False)[res_name]['count']
         else:
             count = lambda pid: self._resource_list(
                 parent_id=pid, count=True, back_refs=False,
-                detail=False)[json_resource]['count']
+                detail=False)[res_name]['count']
 
         ret = [count(self._project_id_neutron_to_vnc(pid) if pid else None)
                for pid in project_ids] if project_ids else [count(None)]
@@ -172,9 +248,10 @@ class ResourceGetHandler(ContrailResourceHandler):
 class VMachineHandler(ResourceGetHandler, ResourceCreateHandler,
                       ResourceDeleteHandler):
     resource_create_method = 'virtual_machine_create'
-    resource_list_method = 'virtual_machines_list'
-    resource_get_method = 'virtual_machine_read'
+    resource_list_method = '_cassandra_virtual_machine_list'
+    resource_get_method = '_cassandra_virtual_machine_read'
     resource_delete_method = 'virtual_machine_delete'
+    obj_type = vnc_api.VirtualMachineInterface
 
     def ensure_vm_instance(self, instance_id):
         instance_name = instance_id
@@ -197,10 +274,12 @@ class VMachineHandler(ResourceGetHandler, ResourceCreateHandler,
 class SGHandler(ResourceGetHandler, ResourceCreateHandler,
                 ResourceDeleteHandler):
     resource_create_method = 'security_group_create'
-    resource_list_method = 'security_groups_list'
-    resource_get_method = 'security_group_read'
+    obj_type = vnc_api.SecurityGroup
+    resource_list_method = '_cassandra_security_group_list'
+    resource_get_method = '_cassandra_security_group_read'
     resource_delete_method = 'security_group_delete'
     _no_rule_sg_obj = None
+    read_once = False
 
     def _create_no_rule_sg(self):
         domain_obj = vnc_api.Domain(vnc_api_common.SG_NO_RULE_FQ_NAME[0])
@@ -217,32 +296,36 @@ class SGHandler(ResourceGetHandler, ResourceCreateHandler,
             security_group_entries=sg_rules,
             id_perms=id_perms)
         self._resource_create(sg_obj)
+        SGHandler._no_rule_sg_obj = sg_obj
         return sg_obj
     # end _create_no_rule_sg
 
-    def get_no_rule_security_group(self, create=True):
-        if SGHandler._no_rule_sg_obj:
+    def get_no_rule_security_group(self, create=False):
+        if SGHandler._no_rule_sg_obj or SGHandler.read_once and not create:
             return SGHandler._no_rule_sg_obj
         try:
-            sg_obj = self._resource_get(
-                fq_name=vnc_api_common.SG_NO_RULE_FQ_NAME)
+            if not SGHandler.read_once:
+                SGHandler._no_rule_sg_obj = self._resource_get(
+                    fq_name=vnc_api_common.SG_NO_RULE_FQ_NAME)
+                SGHandler.read_once = True
+                return SGHandler._no_rule_sg_obj
         except vnc_api.NoIdError:
-            if create:
-                sg_obj = self._create_no_rule_sg()
-            else:
-                sg_obj = None
+            pass
 
-        SGHandler._no_rule_sg_obj = sg_obj
-        return sg_obj
+        if create:
+            return self._create_no_rule_sg()
+
+        return None
 
 
 class InstanceIpHandler(ResourceGetHandler, ResourceCreateHandler,
                         ResourceDeleteHandler, ResourceUpdateHandler):
     resource_create_method = 'instance_ip_create'
-    resource_list_method = 'instance_ips_list'
-    resource_get_method = 'instance_ip_read'
+    resource_list_method = '_cassandra_instance_ip_list'
+    resource_get_method = '_cassandra_instance_ip_read'
     resource_delete_method = 'instance_ip_delete'
     resource_update_method = 'instance_ip_update'
+    obj_type = vnc_api.InstanceIp
 
     def is_ip_addr_in_net_id(self, ip_addr, net_id):
         """Checks if ip address is present in net-id."""

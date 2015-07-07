@@ -49,11 +49,12 @@ class PolicyMixin(object):
 
 
 class PolicyBaseGet(res_handler.ResourceGetHandler):
-    resource_get_method = "network_policy_read"
+    resource_get_method = "_cassandra_network_policy_read"
+    obj_type = vnc_api.NetworkPolicy
 
 
 class PolicyGetHandler(PolicyBaseGet, PolicyMixin):
-    resource_list_method = "network_policys_list"
+    resource_list_method = "_cassandra_network_policy_list"
     detail = False
 
     def resource_get(self, context, policy_id, fields=None):

@@ -18,6 +18,7 @@ import netaddr
 from neutron.common import constants as n_constants
 import subnet_res_handler as subnet_handler
 import vmi_res_handler as vmi_handler
+import vn_res_handler as vn_handler
 from vnc_api import vnc_api
 
 
@@ -74,16 +75,17 @@ class LogicalRouterMixin(object):
 
     def _router_update_gateway(self, router_q, rtr_obj):
         ext_gateway = router_q.get('external_gateway_info')
-        old_ext_gateway = self._get_external_gateway_info(rtr_obj)
-        if ext_gateway or old_ext_gateway:
+        old_ext_net = self._get_external_gateway_info(rtr_obj)
+        if ext_gateway or old_ext_net:
             network_id = None
             if ext_gateway:
-                network_id = ext_gateway.get('network_id')
+                network_id = ext_gateway.get('network_id', None)
             if network_id:
-                if old_ext_gateway and network_id == old_ext_gateway:
+                if old_ext_net and network_id == old_ext_net:
                     return
                 try:
-                    vn_obj = self._vnc_lib.virtual_network_read(id=network_id)
+                    vn_obj = vn_handler.VNetworkHandler(
+                        self._vnc_lib)._resource_get(id=network_id)
                     if not vn_obj.get_router_external():
                         self._raise_contrail_exception(
                             'BadRequest', resource='router',
@@ -170,8 +172,9 @@ class LogicalRouterUpdateHandler(res_handler.ResourceUpdateHandler,
 
 class LogicalRouterGetHandler(res_handler.ResourceGetHandler,
                               LogicalRouterMixin):
-    resource_get_method = 'logical_router_read'
-    resource_list_method = 'logical_routers_list'
+    resource_get_method = '_cassandra_logical_router_read'
+    resource_list_method = '_cassandra_logical_router_list'
+    obj_type = vnc_api.LogicalRouter
 
     def _router_list_project(self, project_id=None, detail=False):
         if project_id:
@@ -184,10 +187,7 @@ class LogicalRouterGetHandler(res_handler.ResourceGetHandler,
 
         resp = self._resource_list(parent_id=project_uuid,
                                    detail=detail)
-        if detail:
-            return resp
-
-        return resp['logical-routers']
+        return resp
 
     def _get_router_list_for_ids(self, rtr_ids, extensions_enabled=True):
         ret_list = []
@@ -204,7 +204,7 @@ class LogicalRouterGetHandler(res_handler.ResourceGetHandler,
 
     def _get_router_list_for_project(self, project_id=None):
         project_rtrs = self._router_list_project(project_id=project_id)
-        rtr_uuids = [rtr['uuid'] for rtr in project_rtrs]
+        rtr_uuids = [rtr.uuid for rtr in project_rtrs]
         return self._get_router_list_for_ids(rtr_uuids)
 
     def _fip_pool_ref_routers(self, project_id):
@@ -260,40 +260,39 @@ class LogicalRouterGetHandler(res_handler.ResourceGetHandler,
                 context, project_ids=filters['tenant_id'])
             for p_id in project_ids:
                 if 'router:external' in filters:
-                    all_rtrs.append(self._fip_pool_ref_routers(p_id))
+                    all_rtrs.extend(self._fip_pool_ref_routers(p_id))
                 else:
                     project_rtrs = self._router_list_project(p_id)
-                    all_rtrs.append(project_rtrs)
+                    all_rtrs.extend(project_rtrs)
 
         else:
             # read all routers in all projects
             project_rtrs = self._router_list_project()
-            all_rtrs.append(project_rtrs)
+            all_rtrs.extend(project_rtrs)
 
         # prune phase
-        for project_rtrs in all_rtrs:
-            for proj_rtr in project_rtrs:
-                proj_rtr_id = proj_rtr['uuid']
-                if not self._filters_is_present(filters, 'id', proj_rtr_id):
-                    continue
+        for proj_rtr in all_rtrs:
+            proj_rtr_id = proj_rtr.uuid
+            if not self._filters_is_present(filters, 'id', proj_rtr_id):
+                continue
 
-                proj_rtr_fq_name = unicode(proj_rtr['fq_name'])
-                if not self._filters_is_present(filters, 'contrail:fq_name',
-                                                proj_rtr_fq_name):
+            proj_rtr_fq_name = unicode(proj_rtr.get_fq_name())
+            if not self._filters_is_present(filters, 'contrail:fq_name',
+                                            proj_rtr_fq_name):
+                continue
+            try:
+                rtr_obj = self._resource_get(id=proj_rtr.uuid)
+                if not self._filters_is_present(
+                        filters, 'name',
+                        rtr_obj.get_display_name() or rtr_obj.name):
                     continue
-                try:
-                    rtr_obj = self._resource_get(id=proj_rtr['uuid'])
-                    if not self._filters_is_present(
-                            filters, 'name',
-                            rtr_obj.get_display_name() or rtr_obj.name):
-                        continue
-                    rtr_info = self._rtr_obj_to_neutron_dict(
-                        rtr_obj,
-                        contrail_extensions_enabled=extensions_enabled,
-                        fields=fields)
-                    ret_list.append(rtr_info)
-                except vnc_exc.NoIdError:
-                    continue
+                rtr_info = self._rtr_obj_to_neutron_dict(
+                    rtr_obj,
+                    contrail_extensions_enabled=extensions_enabled,
+                    fields=fields)
+                ret_list.append(rtr_info)
+            except vnc_exc.NoIdError:
+                continue
 
         return ret_list
 
@@ -309,8 +308,9 @@ class LogicalRouterGetHandler(res_handler.ResourceGetHandler,
 class LogicalRouterInterfaceHandler(res_handler.ResourceGetHandler,
                                     res_handler.ResourceUpdateHandler,
                                     LogicalRouterMixin):
-    resource_get_method = 'logical_router_read'
-    resource_list_method = 'logical_routers_list'
+    resource_get_method = '_cassandra_logical_router_read'
+    resource_list_method = '_cassandra_logical_router_list'
+    obj_type = vnc_api.LogicalRouter
     resource_update_method = 'logical_router_update'
 
     def __init__(self, vnc_lib):
@@ -337,7 +337,8 @@ class LogicalRouterInterfaceHandler(res_handler.ResourceGetHandler,
                              'subnets': {}}
             for vmi_obj in router_vmi_objs:
                 net_id = self._vmi_handler.get_vmi_net_id(vmi_obj)
-                vn_obj = self._vnc_lib.virtual_network_read(id=net_id)
+                vn_obj = vn_handler.VNetworkHandler(
+                    self._vnc_lib)._resource_get(id=net_id)
 
                 fixed_ips = self._vmi_handler.get_vmi_ip_dict(vmi_obj, vn_obj,
                                                               port_req_memo)
@@ -433,7 +434,8 @@ class LogicalRouterInterfaceHandler(res_handler.ResourceGetHandler,
             else:
                 rtr_uuid = None
 
-        vn_obj = self._vnc_lib.virtual_network_read(id=net_id)
+        vn_obj = vn_handler.VNetworkHandler(
+            self._vnc_lib)._resource_get(id=net_id)
         fixed_ips = self._vmi_handler.get_vmi_ip_dict(vmi_obj, vn_obj,
                                                       port_req_memo)
         return vmi_obj, vn_obj, rtr_uuid, fixed_ips
@@ -494,7 +496,8 @@ class LogicalRouterInterfaceHandler(res_handler.ResourceGetHandler,
                                                resource='router', msg=msg)
         tenant_id = self._project_id_vnc_to_neutron(vn_obj.parent_uuid)
         if not vmi_obj:
-            vmi_obj = self._vnc_lib.virtual_machine_interface_read(id=port_id)
+            vmi_obj = vmi_handler.VMInterfaceHandler(
+                self._vnc_lib)._resource_get(id=port_id)
         router_obj.del_virtual_machine_interface(vmi_obj)
         self._vnc_lib.logical_router_update(router_obj)
         self._vmi_handler.resource_delete(context, port_id=port_id)
